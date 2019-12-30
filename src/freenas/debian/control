@@ -2,7 +2,8 @@ Source: truenas-files
 Section: admin
 Priority: optional
 Maintainer: William Grzybowski <william@grzy.org>
-Build-Depends: debhelper-compat (= 12)
+Build-Depends: debhelper-compat (= 12),
+               snmp-mibs-downloader
 Standards-Version: 4.4.0
 Homepage: http://www.truenas.com
 

@@ -5,6 +5,7 @@ import copy
 from datetime import datetime, timedelta
 from decimal import Decimal
 import os
+import platform
 import subprocess
 import threading
 import time
@@ -13,7 +14,8 @@ import libzfs
 import netsnmpagent
 import pysnmp.hlapi  # noqa
 import pysnmp.smi
-import sysctl
+if platform.system() == "FreeBSD":
+    import sysctl
 
 from middlewared.client import Client
 
