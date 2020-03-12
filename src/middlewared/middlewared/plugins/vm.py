@@ -267,9 +267,6 @@ class VMSupervisor:
         self._before_stopping_checks()
         self.domain.destroy()
 
-# 20200312:
-#   TO-DO: adapt logging
-#   /stattin42
     def has_iommu(self):
         def check_iommu(type):
             IOMMU_TEST = {'VT-d': {'arglist': ['/usr/sbin/acpidump', '-t'],
@@ -344,14 +341,15 @@ class VMSupervisor:
                 # bus/slot.
                 self.logger.debug('====> Bus and slot of host PCI device {}/{}/{}'
                                   ' seen before. Using the same guest slot {}'
-                                  ' as before'.format(host_bsf[0], host_bsf[1], host_bsf[2],
-                                                      guest_slot))
+                                  ' as before'.format(host_bsf[0], host_bsf[1],
+                                                      host_bsf[2], guest_slot))
         if item is None:
             # Add passthru device
             guest_bsf = [0, guest_slot, host_bsf[2]]
             self.logger.debug('====> Host PCI device {}/{}/{} passed thru to guest'
-                              ' as PCI device {}:{}'.format(host_bsf[0], host_bsf[1], host_bsf[2],
-                                                            guest_bsf[1], guest_bsf[2]))
+                              ' as PCI device {}:{}'.format(host_bsf[0], host_bsf[1],
+                                                            host_bsf[2], guest_bsf[1],
+                                                            guest_bsf[2]))
             return(guest_bsf)
         else:
             # Do not add same device more than once
@@ -554,6 +552,7 @@ class VMSupervisor:
 
                 device_xml = device.xml(child_element=create_element('address', **address_dict))
             elif isinstance(device, (PCI)):
+                # PCI passthru section begins here
                 if IOMMU_SUPPORT:
                     valid_pptdev = self.check_pptdev(pptdevs, self.data['attributes']['pptdev'])
                     if valid_pptdev:
@@ -566,6 +565,7 @@ class VMSupervisor:
                         device_xml = device.xml(host_bsf=host_bsf, guest_bsf=guest_bsf)
                     else:
                         device_xml = None
+                # PCI passthru section ends here
             else:
                 device_xml = device.xml()
 
@@ -693,7 +693,6 @@ class PCI(Device):
         'attributes',
         Str('pptdev', default=None, required=True),
     )
-
 
     def xml(self, *args, **kwargs):
         host_bsf = kwargs.pop('host_bsf')
