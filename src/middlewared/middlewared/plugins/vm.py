@@ -267,6 +267,9 @@ class VMSupervisor:
         self._before_stopping_checks()
         self.domain.destroy()
 
+# 20200312:
+#   TO-DO: adapt logging
+#   /stattin42
     def has_iommu(self):
         def check_iommu(type):
             IOMMU_TEST = {'VT-d': {'arglist': ['/usr/sbin/acpidump', '-t'],
@@ -296,6 +299,64 @@ class VMSupervisor:
                 return(type)
         self.logger.debug('====> PCI passthrough not supported on this system'
                           ' (no VT-d or amdvi)')
+        return(None)
+
+    def check_pptdev(self, pptdevs, pptdev):
+        # Check format and availability of PPT device
+        if re.match(r'([0-9]+/){2}[0-9]+', pptdev) is None:
+            # Device specifier has invalid format.
+            self.logger.debug('====> Invalid host PCI device specification: {}.'
+                              ' Skipping'.format(pptdev))
+        elif pptdev not in pptdevs:
+            # Device not available for passthru
+            self.logger.debug('====> Host PCI device {} not available for'
+                              ' passthru to guest. Skipping.'.format(pptdev))
+        else:
+            # Device OK
+            return(pptdev)
+        # Skip this device
+        return(None)
+
+    def guest_pptdev(self, pptslots, nid, host_bsf):
+
+        # Multi-function PCI devices are not always independent. For some (but
+        # not all) adapters the mappings of functions must be the same in the
+        # guest. For simplicity, we map functions of the same host slot on one
+        # guest slot.
+
+        # Compile list of already assigned devices with same source slot
+        mylist = (item for item in pptslots if item['host_bsf'][0:2] == host_bsf[0:2])
+        item = next(mylist, None)
+        if item is None:
+            # Source bus/slot not seen before. Map on new guest slot.
+            guest_slot = nid()
+        else:
+            # Source bus/slot seen before. Reuse the old guest slot.
+            guest_slot = item['guest_slot']
+            # No need to map the same bus/slot/function more than once.
+            # Check if the function has already been mapped.
+            while (item is not None and item['host_bsf'] != host_bsf):
+                # Not same function. Check next item.
+                item = next(mylist, None)
+            if item is None:
+                # Host bus/slot seen before, but function is new.
+                # Map it on the same guest slot as other functions of same host
+                # bus/slot.
+                self.logger.debug('====> Bus and slot of host PCI device {}/{}/{}'
+                                  ' seen before. Using the same guest slot {}'
+                                  ' as before'.format(host_bsf[0], host_bsf[1], host_bsf[2],
+                                                      guest_slot))
+        if item is None:
+            # Add passthru device
+            guest_bsf = [0, guest_slot, host_bsf[2]]
+            self.logger.debug('====> Host PCI device {}/{}/{} passed thru to guest'
+                              ' as PCI device {}:{}'.format(host_bsf[0], host_bsf[1], host_bsf[2],
+                                                            guest_bsf[1], guest_bsf[2]))
+            return(guest_bsf)
+        else:
+            # Do not add same device more than once
+            self.logger.debug('====> Host PCI device {} already passed thru to'
+                              ' guest. Skipping.'.format(pptdev))
         return(None)
 
     def construct_xml(self):
@@ -409,6 +470,8 @@ class VMSupervisor:
         ahci_current_controller = controller_base.copy()
         virtio_current_controller = controller_base.copy()
         IOMMU_SUPPORT = self.has_iommu()
+        pptdevs = self.middleware.call_sync('vm.device.pptdev_choices')
+        pptslots = []
 
         for device in self.devices:
             if isinstance(device, (DISK, CDROM, RAW)):
@@ -492,7 +555,17 @@ class VMSupervisor:
                 device_xml = device.xml(child_element=create_element('address', **address_dict))
             elif isinstance(device, (PCI)):
                 if IOMMU_SUPPORT:
-                    device_xml = device.xml()
+                    valid_pptdev = self.check_pptdev(pptdevs, self.data['attributes']['pptdev'])
+                    if valid_pptdev:
+                        host_bsf = valid_pptdev.split('/')
+                        guest_bsf = self.guest_pptdev(pptslots, nid, host_bsf)
+                    else:
+                        guest_bsf = None
+                    if guest_bsf is not None:
+                        pptslots.append({'host_bsf': host_bsf, 'guest_slot': guest_bsf[1]})
+                        device_xml = device.xml(host_bsf=host_bsf, guest_bsf=guest_bsf)
+                    else:
+                        device_xml = None
             else:
                 device_xml = device.xml()
 
@@ -621,95 +694,30 @@ class PCI(Device):
         Str('pptdev', default=None, required=True),
     )
 
-    def check_pptdev(self, pptdevs, pptdev):
-        # Check format and availability of PPT device
-        if re.match(r'([0-9]+/){2}[0-9]+', pptdev) is None:
-            # Device specifier has invalid format.
-            self.logger.debug('====> Invalid host PCI device specification: {}.'
-                              ' Skipping'.format(pptdev))
-        elif pptdev not in pptdevs:
-            # Device not available for passthru
-            self.logger.debug('====> Host PCI device {} not available for'
-                              ' passthru to guest. Skipping.'.format(pptdev))
-        else:
-            # Device OK
-            return(pptdev)
-        # Skip this device
-        return(None)
-
-    def target_pptdev(self, pptslots, nid, pptdev):
-        pptdev_bsf = pptdev.split('/')
-
-        # Multi-function PCI devices are not always independent. For some (but
-        # not all) adapters the mappings of functions must be the same in the
-        # guest. For simplicity, we map functions of the same host slot on one
-        # guest slot.
-
-        # Compile list of already assigned devices with same source slot
-        mylist = (item for item in pptslots if item['host_bsf'][0:2] == pptdev_bsf[0:2])
-        item = next(mylist, None)
-        if item is None:
-            # Source bus/slot not seen before. Map on new guest slot.
-            guest_slot = nid()
-        else:
-            # Source bus/slot seen before. Reuse the old guest slot.
-            guest_slot = item['guest_slot']
-            # No need to map the same bus/slot/function more than once.
-            # Check if the function has already been mapped.
-            while (item is not None and item['host_bsf'] != pptdev_bsf):
-                # Not same function. Check next item.
-                item = next(mylist, None)
-            if item is None:
-                # Host bus/slot seen before, but function is new.
-                # Map it on the same guest slot as other functions of same host
-                # bus/slot.
-                self.logger.debug('====> Bus and slot of host PCI device {}'
-                                  ' seen before. Using the same guest slot {}'
-                                  ' as before'.format(pptdev, guest_slot))
-        if item is None:
-            # Add passthru device
-            pptdev_args = []
-            pptslots.append({'host_bsf': pptdev_bsf, 'guest_slot': guest_slot})
-            self.logger.debug('====> Host PCI device {} passed thru to guest'
-                              ' as PCI device {}:{}'.format(pptdev, guest_slot,
-                                                            pptdev_bsf[2]))
-            return([0, guest_slot, pptdev_bsf[2]])
-        else:
-            # Do not add same device more than once
-            self.logger.debug('====> Host PCI device {} already passed thru to'
-                              ' guest. Skipping.'.format(pptdev))
-        return(None)
-
 
     def xml(self, *args, **kwargs):
-        valid_pptdev = self.check_pptdev(pptdevs, self.data['attributes']['pptdev'])
-        if valid_pptdev:
-            host_bsf = valid_pptdev.split('/')
-            guest_sf = self.guest_pptdev(pptslots, nid, valid_pptdev)
-            return create_element(
-                'hostdev', mode='subsystem', type='pci', managed='no', attribute_dict={
-                    'children': [
-                        create_element(
-                            'source', attribute_dict={
-                                'children': [
-                                    create_element('address', domain='0x0000', bus=host_bsf[0],
-                                                   slot=host_bsf[1], function=host_bsf[2]),
-                                ]
-                            }
-                        ),
-                        create_element('address', type='pci', domain='0x0000', bus=guest_bsf[0],
-                                       slot=guest_bsf[1], function=guest_bsf[2]),
-                    ]
-                }
-            )
-        else:
-            return(None)
-# TO DO:
-#   - Check if bus, slot and function need to be provided in hex format in xml
-#   - Adapt debug output
-#   - Initialize variables pptdevs, pptslots and IOMMU_SUPPORT
-#         pptdevs = await self.middleware.call('vm.device.pptdev_choices')
-#         pptslots = []
+        host_bsf = kwargs.pop('host_bsf')
+        guest_bsf = kwargs.pop('guest_bsf')
+        return create_element(
+            'hostdev', mode='subsystem', type='pci', managed='no', attribute_dict={
+                'children': [
+                    create_element(
+                        'source', attribute_dict={
+                            'children': [
+                                create_element('address', domain='0x0000',
+                                               bus='0x{:04x}'.format(host_bsf[0]),
+                                               slot='0x{:04x}'.format(host_bsf[1]),
+                                               function='0x{:04x}'.format(host_bsf[2])),
+                            ]
+                        }
+                    ),
+                    create_element('address', type='pci', domain='0x0000',
+                                   bus='0x{:04x}'.format(guest_bsf[0]),
+                                   slot='0x{:04x}'.format(guest_bsf[1]),
+                                   function='0x{:04x}'.format(guest_bsf[2])),
+                ]
+            }
+        )
 
 
 class NIC(Device):
