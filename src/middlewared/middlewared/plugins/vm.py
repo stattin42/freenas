@@ -294,20 +294,23 @@ class VMSupervisor:
         for type in ['VT-d', 'amdvi']:
             if check_iommu(type):
                 return(type)
-        self.logger.debug('====> PCI passthrough not supported on this system'
-                          ' (no VT-d or amdvi)')
+        #self.logger.debug
+        print('====> PCI passthrough not supported on this system'
+              ' (no VT-d or amdvi)')
         return(None)
 
     def check_pptdev(self, pptdevs, pptdev):
         # Check format and availability of PPT device
         if re.match(r'([0-9]+/){2}[0-9]+', pptdev) is None:
             # Device specifier has invalid format.
-            self.logger.debug('====> Invalid host PCI device specification: {}.'
-                              ' Skipping'.format(pptdev))
+            #self.logger.debug
+            print('====> Invalid host PCI device specification: {}.'
+                  ' Skipping'.format(pptdev))
         elif pptdev not in pptdevs:
             # Device not available for passthru
-            self.logger.debug('====> Host PCI device {} not available for'
-                              ' passthru to guest. Skipping.'.format(pptdev))
+            #self.logger.debug
+            print('====> Host PCI device {} not available for'
+                  ' passthru to guest. Skipping.'.format(pptdev))
         else:
             # Device OK
             return(pptdev)
@@ -339,22 +342,26 @@ class VMSupervisor:
                 # Host bus/slot seen before, but function is new.
                 # Map it on the same guest slot as other functions of same host
                 # bus/slot.
-                self.logger.debug('====> Bus and slot of host PCI device {}/{}/{}'
-                                  ' seen before. Using the same guest slot {}'
-                                  ' as before'.format(host_bsf[0], host_bsf[1],
-                                                      host_bsf[2], guest_slot))
+                #self.logger.debug
+                print('====> Bus and slot of host PCI device {}/{}/{}'
+                      ' seen before. Using the same guest slot {}'
+                      ' as before'.format(host_bsf[0], host_bsf[1],
+                                          host_bsf[2], guest_slot))
         if item is None:
             # Add passthru device
             guest_bsf = [0, guest_slot, host_bsf[2]]
-            self.logger.debug('====> Host PCI device {}/{}/{} passed thru to guest'
-                              ' as PCI device {}:{}'.format(host_bsf[0], host_bsf[1],
-                                                            host_bsf[2], guest_bsf[1],
-                                                            guest_bsf[2]))
+            #self.logger.debug
+            with open("/var/log/ppt.txt", "a") as myfile:
+                myfile.write('====> Host PCI device {}/{}/{} passed thru to guest'
+                             ' as PCI device {}:{}'.format(host_bsf[0], host_bsf[1],
+                                                           host_bsf[2], guest_bsf[1],
+                                                           guest_bsf[2]))
             return(guest_bsf)
         else:
             # Do not add same device more than once
-            self.logger.debug('====> Host PCI device {} already passed thru to'
-                              ' guest. Skipping.'.format(pptdev))
+            #self.logger.debug
+            print('====> Host PCI device {} already passed thru to'
+                  ' guest. Skipping.'.format(pptdev))
         return(None)
 
     def construct_xml(self):
@@ -467,8 +474,10 @@ class VMSupervisor:
         controller_base = {'index': None, 'slot': None, 'function': 0, 'devices': 0}
         ahci_current_controller = controller_base.copy()
         virtio_current_controller = controller_base.copy()
-        IOMMU_SUPPORT = self.has_iommu()
-        pptdevs = self.middleware.call_sync('vm.device.pptdev_choices')
+        #IOMMU_SUPPORT = self.has_iommu()
+        IOMMU_SUPPORT = True
+        #pptdevs = self.middleware.call_sync('vm.device.pptdev_choices')
+        pptdevs = ['1/0/0']
         pptslots = []
 
         for device in self.devices:
@@ -551,13 +560,13 @@ class VMSupervisor:
                     }
 
                 device_xml = device.xml(child_element=create_element('address', **address_dict))
-            elif isinstance(device, (PCI)):
+            elif isinstance(device, PCI):
                 # PCI passthru section begins here
                 if IOMMU_SUPPORT:
-                    valid_pptdev = self.check_pptdev(pptdevs, self.data['attributes']['pptdev'])
+                    valid_pptdev = self.check_pptdev(pptdevs, device.data['attributes'].get('pptdev'))
                     if valid_pptdev:
-                        host_bsf = valid_pptdev.split('/')
-                        guest_bsf = self.guest_pptdev(pptslots, nid, host_bsf)
+                        host_bsf = list(map(int, valid_pptdev.split('/')))
+                        guest_bsf = self.guest_pptdev(pptslots, pci_slot, host_bsf)
                     else:
                         guest_bsf = None
                     if guest_bsf is not None:
@@ -583,6 +592,10 @@ class VMSupervisor:
             )
         )
 
+
+
+        #with open("/var/log/ppt.txt", "a") as myfile:
+        #    myfile.write(etree.tostring(devices, pretty_print=True))
         return create_element('devices', attribute_dict={'children': devices})
 
 
