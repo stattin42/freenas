@@ -267,56 +267,6 @@ class VMSupervisor:
         self._before_stopping_checks()
         self.domain.destroy()
 
-    def has_iommu(self):
-        def check_iommu(type):
-            IOMMU_TEST = {'VT-d': {'arglist': ['/usr/sbin/acpidump', '-t'],
-                                   'string': 'DMAR'},
-                          'amdvi': {'arglist': ['/sbin/sysctl', 'hw'],
-                                    'string': 'vmm.amdvi.enable: 1'}}
-            if type in IOMMU_TEST:
-                proc1 = subprocess.Popen(IOMMU_TEST[type]['arglist'],
-                                         stdout=subprocess.PIPE,
-                                         stderr=subprocess.DEVNULL)
-                proc2 = subprocess.Popen(['/usr/bin/grep', IOMMU_TEST[type]['string']],
-                                         stdin=proc1.stdout,
-                                         stdout=subprocess.PIPE,
-                                         stderr=subprocess.DEVNULL)
-                proc1.stdout.close()  # Allow proc1 to receive a SIGPIPE if proc2 exits.
-                try:
-                    outs, errs = proc2.communicate(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc2.kill()
-                    outs, errs = proc2.communicate()
-                if outs:
-                    return(type)
-            return(None)
-
-        for type in ['VT-d', 'amdvi']:
-            if check_iommu(type):
-                return(type)
-        #self.logger.debug
-        print('====> PCI passthrough not supported on this system'
-              ' (no VT-d or amdvi)')
-        return(None)
-
-    def check_pptdev(self, pptdevs, pptdev):
-        # Check format and availability of PPT device
-        if re.match(r'([0-9]+/){2}[0-9]+', pptdev) is None:
-            # Device specifier has invalid format.
-            #self.logger.debug
-            print('====> Invalid host PCI device specification: {}.'
-                  ' Skipping'.format(pptdev))
-        elif pptdev not in pptdevs:
-            # Device not available for passthru
-            #self.logger.debug
-            print('====> Host PCI device {} not available for'
-                  ' passthru to guest. Skipping.'.format(pptdev))
-        else:
-            # Device OK
-            return(pptdev)
-        # Skip this device
-        return(None)
-
     def guest_pptdev(self, pptslots, nid, host_bsf):
 
         # Multi-function PCI devices are not always independent. For some (but
@@ -342,27 +292,31 @@ class VMSupervisor:
                 # Host bus/slot seen before, but function is new.
                 # Map it on the same guest slot as other functions of same host
                 # bus/slot.
-                #self.logger.debug
-                print('====> Bus and slot of host PCI device {}/{}/{}'
-                      ' seen before. Using the same guest slot {}'
-                      ' as before'.format(host_bsf[0], host_bsf[1],
-                                          host_bsf[2], guest_slot))
+                # @stattin42
+                # with open("/var/log/ppt.txt", "a") as myfile:
+                #     myfile.write('====> Bus and slot of host PCI device {}/{}/{}'
+                #                  ' seen before. Using the same guest slot {}'
+                #                  ' as before.\n'.format(host_bsf[0], host_bsf[1],
+                #                                      host_bsf[2], guest_slot))
+                pass  # placeholder for logging
         if item is None:
             # Add passthru device
             guest_bsf = [0, guest_slot, host_bsf[2]]
-            #self.logger.debug
-            with open("/var/log/ppt.txt", "a") as myfile:
-                myfile.write('====> Host PCI device {}/{}/{} passed thru to guest'
-                             ' as PCI device {}:{}'.format(host_bsf[0], host_bsf[1],
-                                                           host_bsf[2], guest_bsf[1],
-                                                           guest_bsf[2]))
-            return(guest_bsf)
+            # @stattin42
+            # with open("/var/log/ppt.txt", "a") as myfile:
+            #     myfile.write('====> Host PCI device {}/{}/{} passed thru to guest'
+            #                  ' as PCI device {}:{}.\n'.format(host_bsf[0], host_bsf[1],
+            #                                                host_bsf[2], guest_bsf[1],
+            #                                                guest_bsf[2]))
+            return guest_bsf
         else:
             # Do not add same device more than once
-            #self.logger.debug
-            print('====> Host PCI device {} already passed thru to'
-                  ' guest. Skipping.'.format(pptdev))
-        return(None)
+            # @stattin42
+            # with open("/var/log/ppt.txt", "a") as myfile:
+            #     myfile.write('====> Host PCI device {}/{}/{} already passed thru to'
+            #                  ' guest. Skipping.\n'.format(host_bsf[0], host_bsf[1], host_bsf[2]))
+            pass  # placeholder for logging
+        return None
 
     def construct_xml(self):
         domain = create_element(
@@ -389,6 +343,16 @@ class VMSupervisor:
                     ),
                     # Memory related xml
                     create_element('memory', unit='M', attribute_dict={'text': str(self.vm_data['memory'])}),
+                    # Wire memory if PCI passthru is used or it is otherwise needed or requested
+                    # @stattin42:
+                    #     need to make inclusion of the memoryBacking element conditional
+                    create_element(
+                        'memoryBacking', attribute_dict={
+                            'children': [
+                                create_element('locked'),
+                            ]
+                        }
+                    ),
                     # Add features
                     create_element(
                         'features', attribute_dict={
@@ -474,10 +438,6 @@ class VMSupervisor:
         controller_base = {'index': None, 'slot': None, 'function': 0, 'devices': 0}
         ahci_current_controller = controller_base.copy()
         virtio_current_controller = controller_base.copy()
-        #IOMMU_SUPPORT = self.has_iommu()
-        IOMMU_SUPPORT = True
-        #pptdevs = self.middleware.call_sync('vm.device.pptdev_choices')
-        pptdevs = ['1/0/0']
         pptslots = []
 
         for device in self.devices:
@@ -562,23 +522,20 @@ class VMSupervisor:
                 device_xml = device.xml(child_element=create_element('address', **address_dict))
             elif isinstance(device, PCI):
                 # PCI passthru section begins here
-                if IOMMU_SUPPORT:
-                    valid_pptdev = self.check_pptdev(pptdevs, device.data['attributes'].get('pptdev'))
-                    if valid_pptdev:
-                        host_bsf = list(map(int, valid_pptdev.split('/')))
-                        guest_bsf = self.guest_pptdev(pptslots, pci_slot, host_bsf)
-                    else:
-                        guest_bsf = None
-                    if guest_bsf is not None:
-                        pptslots.append({'host_bsf': host_bsf, 'guest_slot': guest_bsf[1]})
-                        device_xml = device.xml(host_bsf=host_bsf, guest_bsf=guest_bsf)
-                    else:
-                        device_xml = None
+                pptdev = device.data['attributes'].get('pptdev')
+                host_bsf = list(map(int, pptdev.split('/')))
+                guest_bsf = self.guest_pptdev(pptslots, pci_slot, host_bsf)
+                if guest_bsf is not None:
+                    pptslots.append({'host_bsf': host_bsf, 'guest_slot': guest_bsf[1]})
+                    device_xml = device.xml(host_bsf=host_bsf, guest_bsf=guest_bsf)
+                else:
+                    device_xml = None
                 # PCI passthru section ends here
             else:
                 device_xml = device.xml()
 
-            devices.extend(device_xml if isinstance(device_xml, (tuple, list)) else [device_xml])
+            if device_xml is not None:
+                devices.extend(device_xml if isinstance(device_xml, (tuple, list)) else [device_xml])
 
         devices.append(
             create_element(
@@ -592,10 +549,11 @@ class VMSupervisor:
             )
         )
 
-
-
-        #with open("/var/log/ppt.txt", "a") as myfile:
-        #    myfile.write(etree.tostring(devices, pretty_print=True))
+        # @stattin42
+        # Write device xml to file
+        # with open("/var/log/ppt.txt", "a") as myfile:
+        #     myfile.write(etree.tostring(create_element('devices', attribute_dict={'children': devices}),
+        #                                 pretty_print=True).decode('utf-8').strip('\x00'))
         return create_element('devices', attribute_dict={'children': devices})
 
 
@@ -1944,7 +1902,10 @@ class VMDeviceService(CRUDService):
             if object:
                 pptdev = object.group(2).replace(':', '/')
                 pptdevs[pptdev] = pptdev
-        return(pptdevs)
+        # TESTING
+        pptdevs['1/4/0'] = '1/4/0'
+        pptdevs['1/4/3'] = '1/4/3'
+        return pptdevs
 
     @accepts()
     def vnc_bind_choices(self):
@@ -2137,6 +2098,36 @@ class VMDeviceService(CRUDService):
             return False
 
     @private
+    async def get_iommu_type(self):
+        def check_iommu(type):
+            IOMMU_TEST = {'VT-d': {'arglist': ['/usr/sbin/acpidump', '-t'],
+                                   'string': 'DMAR'},
+                          'amdvi': {'arglist': ['/sbin/sysctl', 'hw'],
+                                    'string': 'vmm.amdvi.enable: 1'}}
+            if type in IOMMU_TEST:
+                proc1 = subprocess.Popen(IOMMU_TEST[type]['arglist'],
+                                         stdout=subprocess.PIPE,
+                                         stderr=subprocess.DEVNULL)
+                proc2 = subprocess.Popen(['/usr/bin/grep', IOMMU_TEST[type]['string']],
+                                         stdin=proc1.stdout,
+                                         stdout=subprocess.PIPE,
+                                         stderr=subprocess.DEVNULL)
+                proc1.stdout.close()  # Allow proc1 to receive a SIGPIPE if proc2 exits.
+                try:
+                    outs, errs = proc2.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc2.kill()
+                    outs, errs = proc2.communicate()
+                if outs:
+                    return type
+            return None
+
+        for type in ['VT-d', 'amdvi']:
+            if check_iommu(type):
+                return type
+        return None
+
+    @private
     async def validate_device(self, device, old=None, vm_instance=None):
         # We allow vm_instance to be passed for cases where VM devices are being updated via VM and
         # the device checks should be performed with the modified vm_instance object not the one db holds
@@ -2257,7 +2248,16 @@ class VMDeviceService(CRUDService):
         elif device.get('dtype') == 'PCI':
             pptdev = device['attributes'].get('pptdev')
             if not pptdev:
-                verrors.add('attributes.pptdev', 'PCI device is required.')
+                verrors.add('attributes.pptdev', 'PPT device is required.')
+            elif re.match(r'([0-9]+/){2}[0-9]+', pptdev) is None:
+                verrors.add('attribute.pptdev', 'PPT device format is invalid. Should be on form bus#/slot#/fcn#.')
+            else:
+                pptdevs = await self.middleware.call('vm.device.pptdev_choices')
+                if pptdev not in pptdevs:
+                    verrors.add('attribute.pptdev', 'Not a valid choice.')
+            IOMMU_TYPE = await self.get_iommu_type()
+            if IOMMU_TYPE is None:
+                verrors.add('attribute.pptdev', 'IOMMU support is required.')
         elif device.get('dtype') == 'VNC':
             if vm_instance:
                 if vm_instance['bootloader'] != 'UEFI':
