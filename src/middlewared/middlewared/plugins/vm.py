@@ -1902,9 +1902,6 @@ class VMDeviceService(CRUDService):
             if object:
                 pptdev = object.group(2).replace(':', '/')
                 pptdevs[pptdev] = pptdev
-        # TESTING
-        pptdevs['1/4/0'] = '1/4/0'
-        pptdevs['1/4/3'] = '1/4/3'
         return pptdevs
 
     @accepts()
