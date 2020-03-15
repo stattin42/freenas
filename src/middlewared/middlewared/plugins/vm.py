@@ -51,7 +51,7 @@ LIBVIRT_URI = 'bhyve+unix:///system'
 LIBVIRT_AVAILABLE_SLOTS = 29  # 3 slots are being used by libvirt / bhyve
 SHUTDOWN_LOCK = asyncio.Lock()
 LIBVIRT_LOCK = asyncio.Lock()
-LIBVIRT_HOSTDEV = False
+LIBVIRT_HOSTDEV = False  # Whether libvirt supports hostdev for bhyve or not
 LIBVIRT_BHYVE_NAMESPACE = 'http://libvirt.org/schemas/domain/bhyve/1.0'
 LIBVIRT_BHYVE = '{%s}' % LIBVIRT_BHYVE_NAMESPACE
 LIBVIRT_BHYVE_NSMAP = {'bhyve' : LIBVIRT_BHYVE_NAMESPACE}
@@ -89,6 +89,8 @@ class VMSupervisor:
         self.connection = connection
         self.middleware = middleware
         self.devices = []
+        self.pptslots = []  # For sharing between device_xml and commadline_xml functions.
+                            # Not needed once libvirt supports hostdev for bhyve.
 
         if not self.connection or not self.connection.isAlive():
             raise CallError(f'Failed to connect to libvirtd for {self.vm_data["name"]}')
@@ -286,7 +288,7 @@ class VMSupervisor:
             guest_slot = nid()
         else:
             # Source bus/slot seen before. Reuse the old guest slot.
-            guest_slot = item['guest_slot']
+            guest_slot = item['guest_bsf'][1]
             # No need to map the same bus/slot/function more than once.
             # Check if the function has already been mapped.
             while (item is not None and item['host_bsf'] != host_bsf):
@@ -350,8 +352,6 @@ class VMSupervisor:
         #   message if not selected when PCI passthru is configured.
         #
         if any(isinstance(device, PCI) for device in self.devices):
-            with open("/var/log/ppt.txt", "a") as myfile:
-                myfile.write('HEJSAN HOPPSAN!\n')
             domain_children.append(
                 create_element(
                     'memoryBacking', attribute_dict={
@@ -369,11 +369,6 @@ class VMSupervisor:
                 'children': domain_children
             }, nsmap=LIBVIRT_BHYVE_NSMAP
         )
-
-        # @stattin42
-        # Write xml to file
-        with open("/var/log/ppt.txt", "a") as myfile:
-            myfile.write(etree.tostring(domain, pretty_print=True).decode('utf-8').strip('\x00'))
 
         return domain
 
@@ -531,7 +526,7 @@ class VMSupervisor:
                 host_bsf = list(map(int, pptdev.split('/')))
                 guest_bsf = self.guest_pptdev(pptslots, pci_slot, host_bsf)
                 if guest_bsf is not None:
-                    pptslots.append({'host_bsf': host_bsf, 'guest_slot': guest_bsf[1]})
+                    pptslots.append({'host_bsf': host_bsf, 'guest_bsf': guest_bsf})
                     device_xml = device.xml(host_bsf=host_bsf, guest_bsf=guest_bsf)
                 else:
                     device_xml = None
@@ -541,6 +536,8 @@ class VMSupervisor:
 
             if device_xml is not None:
                 devices.extend(device_xml if isinstance(device_xml, (tuple, list)) else [device_xml])
+
+        self.pptslots = pptslots
 
         devices.append(
             create_element(
@@ -557,27 +554,17 @@ class VMSupervisor:
         return create_element('devices', attribute_dict={'children': devices})
 
     def commandline_xml(self):
-        devices = []
-        pci_slot = Nid(15) # @stattin42: need to find first free slot after other devices or
-                           #             provide info about next free slot to device_xml()
-        pptslots = []
         args = []
 
         if not LIBVIRT_HOSTDEV:
-            for device in self.devices:
-                if isinstance(device, PCI):
-                    # PCI passthru section begins here
-                    pptdev = device.data['attributes'].get('pptdev')
-                    host_bsf = list(map(int, pptdev.split('/')))
-                    guest_bsf = self.guest_pptdev(pptslots, pci_slot, host_bsf)
-                    if guest_bsf is not None:
-                        pptslots.append({'host_bsf': host_bsf, 'guest_slot': guest_bsf[1]})
-                        device_xml = device.commandline_xml(host_bsf=host_bsf, guest_bsf=guest_bsf)
-                    else:
-                        device_xml = None
-                    if device_xml is not None:
-                        args.append(device_xml)
-                    # PCI passthru section ends here
+            for item in self.pptslots:
+                arg_value='-s {g[1]}:{g[2]},passthru,{h[0]}/{h[1]}/{h[2]}'.format(
+                    g=item['guest_bsf'], h=item['host_bsf'])
+                args.append(
+                    create_element(
+                        etree.QName(LIBVIRT_BHYVE_NAMESPACE, 'arg'),
+                        value=arg_value, nsmap=LIBVIRT_BHYVE_NSMAP)
+                )
 
         return create_element(etree.QName(LIBVIRT_BHYVE_NAMESPACE, 'commandline'),
                               attribute_dict={'children': args}) if args else None
