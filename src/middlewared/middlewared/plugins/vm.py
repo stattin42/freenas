@@ -51,6 +51,10 @@ LIBVIRT_URI = 'bhyve+unix:///system'
 LIBVIRT_AVAILABLE_SLOTS = 29  # 3 slots are being used by libvirt / bhyve
 SHUTDOWN_LOCK = asyncio.Lock()
 LIBVIRT_LOCK = asyncio.Lock()
+LIBVIRT_HOSTDEV = False
+LIBVIRT_BHYVE_NAMESPACE = 'http://libvirt.org/schemas/domain/bhyve/1.0'
+LIBVIRT_BHYVE = '{%s}' % LIBVIRT_BHYVE_NAMESPACE
+LIBVIRT_BHYVE_NSMAP = {'bhyve' : LIBVIRT_BHYVE_NAMESPACE}
 ZFS_ARC_MAX_INITIAL = None
 
 ZVOL_CLONE_SUFFIX = '_clone'
@@ -292,36 +296,19 @@ class VMSupervisor:
                 # Host bus/slot seen before, but function is new.
                 # Map it on the same guest slot as other functions of same host
                 # bus/slot.
-                # @stattin42
-                # with open("/var/log/ppt.txt", "a") as myfile:
-                #     myfile.write('====> Bus and slot of host PCI device {}/{}/{}'
-                #                  ' seen before. Using the same guest slot {}'
-                #                  ' as before.\n'.format(host_bsf[0], host_bsf[1],
-                #                                      host_bsf[2], guest_slot))
                 pass  # placeholder for logging
         if item is None:
+            # This host bus/slot/function is not mapped yet.
             # Add passthru device
             guest_bsf = [0, guest_slot, host_bsf[2]]
-            # @stattin42
-            # with open("/var/log/ppt.txt", "a") as myfile:
-            #     myfile.write('====> Host PCI device {}/{}/{} passed thru to guest'
-            #                  ' as PCI device {}:{}.\n'.format(host_bsf[0], host_bsf[1],
-            #                                                host_bsf[2], guest_bsf[1],
-            #                                                guest_bsf[2]))
             return guest_bsf
         else:
-            # Do not add same device more than once
-            # @stattin42
-            # with open("/var/log/ppt.txt", "a") as myfile:
-            #     myfile.write('====> Host PCI device {}/{}/{} already passed thru to'
-            #                  ' guest. Skipping.\n'.format(host_bsf[0], host_bsf[1], host_bsf[2]))
+            # This host bus/slot/function is already mapped. Do not add it again.
             pass  # placeholder for logging
         return None
 
     def construct_xml(self):
-        domain = create_element(
-            'domain', type='bhyve', id=str(self.vm_data['id']), attribute_dict={
-                'children': [
+        domain_children = [
                     create_element('name', attribute_dict={'text': self.libvirt_domain_name}),
                     create_element('title', attribute_dict={'text': self.vm_data['name']}),
                     create_element('description', attribute_dict={'text': self.vm_data['description']}),
@@ -343,16 +330,6 @@ class VMSupervisor:
                     ),
                     # Memory related xml
                     create_element('memory', unit='M', attribute_dict={'text': str(self.vm_data['memory'])}),
-                    # Wire memory if PCI passthru is used or it is otherwise needed or requested
-                    # @stattin42:
-                    #     need to make inclusion of the memoryBacking element conditional
-                    create_element(
-                        'memoryBacking', attribute_dict={
-                            'children': [
-                                create_element('locked'),
-                            ]
-                        }
-                    ),
                     # Add features
                     create_element(
                         'features', attribute_dict={
@@ -367,8 +344,36 @@ class VMSupervisor:
                     # Devices
                     self.devices_xml(),
                 ]
-            }
+        # Wire memory if PCI passthru device is configured
+        #   To avoid surprising side effects from implicit configuration, wiring of memory
+        #   should preferably be an explicit vm configuration option and trigger error
+        #   message if not selected when PCI passthru is configured.
+        #
+        if any(isinstance(device, PCI) for device in self.devices):
+            with open("/var/log/ppt.txt", "a") as myfile:
+                myfile.write('HEJSAN HOPPSAN!\n')
+            domain_children.append(
+                create_element(
+                    'memoryBacking', attribute_dict={
+                        'children': [
+                            create_element('locked'),
+                        ]
+                    }
+                )
+            )
+        bhyve_commandline = self.commandline_xml()
+        if bhyve_commandline:
+            domain_children.append(bhyve_commandline)
+        domain = create_element(
+            'domain', type='bhyve', id=str(self.vm_data['id']), attribute_dict={
+                'children': domain_children
+            }, nsmap=LIBVIRT_BHYVE_NSMAP
         )
+
+        # @stattin42
+        # Write xml to file
+        with open("/var/log/ppt.txt", "a") as myfile:
+            myfile.write(etree.tostring(domain, pretty_print=True).decode('utf-8').strip('\x00'))
 
         return domain
 
@@ -549,12 +554,33 @@ class VMSupervisor:
             )
         )
 
-        # @stattin42
-        # Write device xml to file
-        # with open("/var/log/ppt.txt", "a") as myfile:
-        #     myfile.write(etree.tostring(create_element('devices', attribute_dict={'children': devices}),
-        #                                 pretty_print=True).decode('utf-8').strip('\x00'))
         return create_element('devices', attribute_dict={'children': devices})
+
+    def commandline_xml(self):
+        devices = []
+        pci_slot = Nid(15) # @stattin42: need to find first free slot after other devices or
+                           #             provide info about next free slot to device_xml()
+        pptslots = []
+        args = []
+
+        if not LIBVIRT_HOSTDEV:
+            for device in self.devices:
+                if isinstance(device, PCI):
+                    # PCI passthru section begins here
+                    pptdev = device.data['attributes'].get('pptdev')
+                    host_bsf = list(map(int, pptdev.split('/')))
+                    guest_bsf = self.guest_pptdev(pptslots, pci_slot, host_bsf)
+                    if guest_bsf is not None:
+                        pptslots.append({'host_bsf': host_bsf, 'guest_slot': guest_bsf[1]})
+                        device_xml = device.commandline_xml(host_bsf=host_bsf, guest_bsf=guest_bsf)
+                    else:
+                        device_xml = None
+                    if device_xml is not None:
+                        args.append(device_xml)
+                    # PCI passthru section ends here
+
+        return create_element(etree.QName(LIBVIRT_BHYVE_NAMESPACE, 'commandline'),
+                              attribute_dict={'children': args}) if args else None
 
 
 class Device(ABC):
@@ -668,26 +694,38 @@ class PCI(Device):
     def xml(self, *args, **kwargs):
         host_bsf = kwargs.pop('host_bsf')
         guest_bsf = kwargs.pop('guest_bsf')
-        return create_element(
-            'hostdev', mode='subsystem', type='pci', managed='no', attribute_dict={
-                'children': [
-                    create_element(
-                        'source', attribute_dict={
-                            'children': [
-                                create_element('address', domain='0x0000',
-                                               bus='0x{:04x}'.format(host_bsf[0]),
-                                               slot='0x{:04x}'.format(host_bsf[1]),
-                                               function='0x{:04x}'.format(host_bsf[2])),
-                            ]
-                        }
-                    ),
-                    create_element('address', type='pci', domain='0x0000',
-                                   bus='0x{:04x}'.format(guest_bsf[0]),
-                                   slot='0x{:04x}'.format(guest_bsf[1]),
-                                   function='0x{:04x}'.format(guest_bsf[2])),
-                ]
-            }
-        )
+        if LIBVIRT_HOSTDEV:
+            return create_element(
+                'hostdev', mode='subsystem', type='pci', managed='no', attribute_dict={
+                    'children': [
+                        create_element(
+                            'source', attribute_dict={
+                                'children': [
+                                    create_element('address', domain='0x0000',
+                                                   bus='0x{:04x}'.format(host_bsf[0]),
+                                                   slot='0x{:04x}'.format(host_bsf[1]),
+                                                   function='0x{:04x}'.format(host_bsf[2])),
+                                ]
+                            }
+                        ),
+                        create_element('address', type='pci', domain='0x0000',
+                                       bus='0x{:04x}'.format(guest_bsf[0]),
+                                       slot='0x{:04x}'.format(guest_bsf[1]),
+                                       function='0x{:04x}'.format(guest_bsf[2])),
+                    ]
+                }
+            )
+
+    def commandline_xml(self, *args, **kwargs):
+            host_bsf = kwargs.pop('host_bsf')
+            guest_bsf = kwargs.pop('guest_bsf')
+            if not LIBVIRT_HOSTDEV:
+                arg_value='-s {g[1]}:{g[2]},passthru,{h[0]}/{h[1]}/{h[2]}'.format(
+                    g=guest_bsf, h=host_bsf)
+                return create_element(
+                    etree.QName(LIBVIRT_BHYVE_NAMESPACE, 'arg'),
+                    value=arg_value, nsmap=LIBVIRT_BHYVE_NSMAP)
+            return None
 
 
 class NIC(Device):
