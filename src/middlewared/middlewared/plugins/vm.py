@@ -89,7 +89,7 @@ class VMSupervisor:
         self.connection = connection
         self.middleware = middleware
         self.devices = []
-        self.pptslots = []  # For sharing between device_xml and commadline_xml functions.
+        self.ppt_maps = []  # For sharing between device_xml and commadline_xml functions.
                             # Not needed once libvirt supports hostdev for bhyve.
 
         if not self.connection or not self.connection.isAlive():
@@ -273,7 +273,7 @@ class VMSupervisor:
         self._before_stopping_checks()
         self.domain.destroy()
 
-    def guest_pptdev(self, pptslots, nid, host_bsf):
+    def guest_pptdev(self, ppt_maps, nid, host_bsf):
 
         # Multi-function PCI devices are not always independent. For some (but
         # not all) adapters the mappings of functions must be the same in the
@@ -281,7 +281,7 @@ class VMSupervisor:
         # guest slot.
 
         # Compile list of already assigned devices with same source slot
-        mylist = (item for item in pptslots if item['host_bsf'][0:2] == host_bsf[0:2])
+        mylist = (item for item in ppt_maps if item['host_bsf'][0:2] == host_bsf[0:2])
         item = next(mylist, None)
         if item is None:
             # Source bus/slot not seen before. Map on new guest slot.
@@ -370,6 +370,11 @@ class VMSupervisor:
             }, nsmap=LIBVIRT_BHYVE_NSMAP
         )
 
+        # @stattin42
+        # Write xml to file
+        with open("/var/log/ppt.txt", "a") as myfile:
+            myfile.write(etree.tostring(domain, pretty_print=True).decode('utf-8').strip('\x00'))
+
         return domain
 
     def os_xml(self):
@@ -438,7 +443,7 @@ class VMSupervisor:
         controller_base = {'index': None, 'slot': None, 'function': 0, 'devices': 0}
         ahci_current_controller = controller_base.copy()
         virtio_current_controller = controller_base.copy()
-        pptslots = []
+        ppt_maps = []
 
         for device in self.devices:
             if isinstance(device, (DISK, CDROM, RAW)):
@@ -524,9 +529,9 @@ class VMSupervisor:
                 # PCI passthru section begins here
                 pptdev = device.data['attributes'].get('pptdev')
                 host_bsf = list(map(int, pptdev.split('/')))
-                guest_bsf = self.guest_pptdev(pptslots, pci_slot, host_bsf)
+                guest_bsf = self.guest_pptdev(ppt_maps, pci_slot, host_bsf)
                 if guest_bsf is not None:
-                    pptslots.append({'host_bsf': host_bsf, 'guest_bsf': guest_bsf})
+                    ppt_maps.append({'host_bsf': host_bsf, 'guest_bsf': guest_bsf})
                     device_xml = device.xml(host_bsf=host_bsf, guest_bsf=guest_bsf)
                 else:
                     device_xml = None
@@ -537,7 +542,7 @@ class VMSupervisor:
             if device_xml is not None:
                 devices.extend(device_xml if isinstance(device_xml, (tuple, list)) else [device_xml])
 
-        self.pptslots = pptslots
+        self.ppt_maps = ppt_maps
 
         devices.append(
             create_element(
@@ -557,7 +562,7 @@ class VMSupervisor:
         args = []
 
         if not LIBVIRT_HOSTDEV:
-            for item in self.pptslots:
+            for item in self.ppt_maps:
                 arg_value='-s {g[1]}:{g[2]},passthru,{h[0]}/{h[1]}/{h[2]}'.format(
                     g=item['guest_bsf'], h=item['host_bsf'])
                 args.append(
