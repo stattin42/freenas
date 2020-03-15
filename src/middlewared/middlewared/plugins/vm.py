@@ -53,7 +53,6 @@ SHUTDOWN_LOCK = asyncio.Lock()
 LIBVIRT_LOCK = asyncio.Lock()
 LIBVIRT_HOSTDEV = False  # Whether libvirt supports hostdev for bhyve or not
 LIBVIRT_BHYVE_NAMESPACE = 'http://libvirt.org/schemas/domain/bhyve/1.0'
-LIBVIRT_BHYVE = '{%s}' % LIBVIRT_BHYVE_NAMESPACE
 LIBVIRT_BHYVE_NSMAP = {'bhyve' : LIBVIRT_BHYVE_NAMESPACE}
 ZFS_ARC_MAX_INITIAL = None
 
