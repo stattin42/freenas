@@ -347,6 +347,8 @@ class VMSupervisor:
                     self.devices_xml(),
                 ]
         # Wire memory if PCI passthru device is configured
+        #   Implicit configuration for now.
+        #
         #   To avoid surprising side effects from implicit configuration, wiring of memory
         #   should preferably be an explicit vm configuration option and trigger error
         #   message if not selected when PCI passthru is configured.
@@ -369,11 +371,6 @@ class VMSupervisor:
                 'children': domain_children
             }, nsmap=LIBVIRT_BHYVE_NSMAP
         )
-
-        # @stattin42
-        # Write xml to file
-        with open("/var/log/ppt.txt", "a") as myfile:
-            myfile.write(etree.tostring(domain, pretty_print=True).decode('utf-8').strip('\x00'))
 
         return domain
 
@@ -562,6 +559,9 @@ class VMSupervisor:
         args = []
 
         if not LIBVIRT_HOSTDEV:
+            # Unless libvirt supports hostdev for bhyve, we need to pass pci devices
+            # through to guest by means of additional command-line arguments to the
+            # bhyve process using the <bhyve:commandline> element under domain.
             for item in self.ppt_maps:
                 arg_value='-s {g[1]}:{g[2]},passthru,{h[0]}/{h[1]}/{h[2]}'.format(
                     g=item['guest_bsf'], h=item['host_bsf'])
