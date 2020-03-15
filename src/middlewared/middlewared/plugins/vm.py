@@ -686,38 +686,27 @@ class PCI(Device):
     def xml(self, *args, **kwargs):
         host_bsf = kwargs.pop('host_bsf')
         guest_bsf = kwargs.pop('guest_bsf')
-        if LIBVIRT_HOSTDEV:
-            return create_element(
-                'hostdev', mode='subsystem', type='pci', managed='no', attribute_dict={
-                    'children': [
-                        create_element(
-                            'source', attribute_dict={
-                                'children': [
-                                    create_element('address', domain='0x0000',
-                                                   bus='0x{:04x}'.format(host_bsf[0]),
-                                                   slot='0x{:04x}'.format(host_bsf[1]),
-                                                   function='0x{:04x}'.format(host_bsf[2])),
-                                ]
-                            }
-                        ),
-                        create_element('address', type='pci', domain='0x0000',
-                                       bus='0x{:04x}'.format(guest_bsf[0]),
-                                       slot='0x{:04x}'.format(guest_bsf[1]),
-                                       function='0x{:04x}'.format(guest_bsf[2])),
-                    ]
-                }
-            )
 
-    def commandline_xml(self, *args, **kwargs):
-            host_bsf = kwargs.pop('host_bsf')
-            guest_bsf = kwargs.pop('guest_bsf')
-            if not LIBVIRT_HOSTDEV:
-                arg_value='-s {g[1]}:{g[2]},passthru,{h[0]}/{h[1]}/{h[2]}'.format(
-                    g=guest_bsf, h=host_bsf)
-                return create_element(
-                    etree.QName(LIBVIRT_BHYVE_NAMESPACE, 'arg'),
-                    value=arg_value, nsmap=LIBVIRT_BHYVE_NSMAP)
-            return None
+        return create_element(
+            'hostdev', mode='subsystem', type='pci', managed='no', attribute_dict={
+                'children': [
+                    create_element(
+                        'source', attribute_dict={
+                            'children': [
+                                create_element('address', domain='0x0000',
+                                               bus='0x{:04x}'.format(host_bsf[0]),
+                                               slot='0x{:04x}'.format(host_bsf[1]),
+                                               function='0x{:04x}'.format(host_bsf[2])),
+                            ]
+                        }
+                    ),
+                    create_element('address', type='pci', domain='0x0000',
+                                   bus='0x{:04x}'.format(guest_bsf[0]),
+                                   slot='0x{:04x}'.format(guest_bsf[1]),
+                                   function='0x{:04x}'.format(guest_bsf[2])),
+                ]
+            }
+        )
 
 
 class NIC(Device):
