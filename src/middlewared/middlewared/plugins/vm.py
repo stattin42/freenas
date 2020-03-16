@@ -53,7 +53,7 @@ SHUTDOWN_LOCK = asyncio.Lock()
 LIBVIRT_LOCK = asyncio.Lock()
 LIBVIRT_HOSTDEV = False  # Whether libvirt supports hostdev for bhyve or not
 LIBVIRT_BHYVE_NAMESPACE = 'http://libvirt.org/schemas/domain/bhyve/1.0'
-LIBVIRT_BHYVE_NSMAP = {'bhyve' : LIBVIRT_BHYVE_NAMESPACE}
+LIBVIRT_BHYVE_NSMAP = {'bhyve': LIBVIRT_BHYVE_NAMESPACE}
 ZFS_ARC_MAX_INITIAL = None
 
 ZVOL_CLONE_SUFFIX = '_clone'
@@ -88,8 +88,10 @@ class VMSupervisor:
         self.connection = connection
         self.middleware = middleware
         self.devices = []
-        self.ppt_maps = []  # For sharing between device_xml and commadline_xml functions.
-                            # Not needed once libvirt supports hostdev for bhyve.
+
+        # ppt_maps for sharing between device_xml and commadline_xml functions.
+        # Not needed once libvirt supports hostdev for bhyve.
+        self.ppt_maps = []
 
         if not self.connection or not self.connection.isAlive():
             raise CallError(f'Failed to connect to libvirtd for {self.vm_data["name"]}')
@@ -310,41 +312,41 @@ class VMSupervisor:
 
     def construct_xml(self):
         domain_children = [
-                    create_element('name', attribute_dict={'text': self.libvirt_domain_name}),
-                    create_element('title', attribute_dict={'text': self.vm_data['name']}),
-                    create_element('description', attribute_dict={'text': self.vm_data['description']}),
-                    # OS/boot related xml - returns an iterable
-                    *self.os_xml(),
-                    # VCPU related xml
-                    create_element('vcpu', attribute_dict={
-                        'text': str(self.vm_data['vcpus'] * self.vm_data['cores'] * self.vm_data['threads'])
-                    }),
-                    create_element(
-                        'cpu', attribute_dict={
-                            'children': [
-                                create_element(
-                                    'topology', sockets=str(self.vm_data['vcpus']), cores=str(self.vm_data['cores']),
-                                    threads=str(self.vm_data['threads'])
-                                )
-                            ]
-                        }
-                    ),
-                    # Memory related xml
-                    create_element('memory', unit='M', attribute_dict={'text': str(self.vm_data['memory'])}),
-                    # Add features
-                    create_element(
-                        'features', attribute_dict={
-                            'children': [
-                                create_element('acpi'),
-                                create_element('apic'),
-                            ]
-                        }
-                    ),
-                    # Clock offset
-                    create_element('clock', offset='localtime' if self.vm_data['time'] == 'LOCAL' else 'utc'),
-                    # Devices
-                    self.devices_xml(),
-                ]
+            create_element('name', attribute_dict={'text': self.libvirt_domain_name}),
+            create_element('title', attribute_dict={'text': self.vm_data['name']}),
+            create_element('description', attribute_dict={'text': self.vm_data['description']}),
+            # OS/boot related xml - returns an iterable
+            *self.os_xml(),
+            # VCPU related xml
+            create_element('vcpu', attribute_dict={
+                'text': str(self.vm_data['vcpus'] * self.vm_data['cores'] * self.vm_data['threads'])
+            }),
+            create_element(
+                'cpu', attribute_dict={
+                    'children': [
+                        create_element(
+                            'topology', sockets=str(self.vm_data['vcpus']), cores=str(self.vm_data['cores']),
+                            threads=str(self.vm_data['threads'])
+                        )
+                    ]
+                }
+            ),
+            # Memory related xml
+            create_element('memory', unit='M', attribute_dict={'text': str(self.vm_data['memory'])}),
+            # Add features
+            create_element(
+                'features', attribute_dict={
+                    'children': [
+                        create_element('acpi'),
+                        create_element('apic'),
+                    ]
+                }
+            ),
+            # Clock offset
+            create_element('clock', offset='localtime' if self.vm_data['time'] == 'LOCAL' else 'utc'),
+            # Devices
+            self.devices_xml(),
+        ]
         # Wire memory if PCI passthru device is configured
         #   Implicit configuration for now.
         #
@@ -562,7 +564,7 @@ class VMSupervisor:
             # through to guest by means of additional command-line arguments to the
             # bhyve process using the <bhyve:commandline> element under domain.
             for item in self.ppt_maps:
-                arg_value='-s {g[1]}:{g[2]},passthru,{h[0]}/{h[1]}/{h[2]}'.format(
+                arg_value = '-s {g[1]}:{g[2]},passthru,{h[0]}/{h[1]}/{h[2]}'.format(
                     g=item['guest_bsf'], h=item['host_bsf'])
                 args.append(
                     create_element(
