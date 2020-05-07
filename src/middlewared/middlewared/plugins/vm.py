@@ -2180,6 +2180,7 @@ class VMDeviceService(CRUDService):
                                                             stdout=asyncio.subprocess.PIPE,
                                                             stderr=asyncio.subprocess.DEVNULL)
                 found = await asyncio.wait_for(check_util_output(proc, pattern), timeout=5)
+                await asyncio.wait_for(proc.wait(), timeout=5)
             except (asyncio.TimeoutError, OSError, ValueError) as e:
                 if proc is not None:
                     proc.kill()
