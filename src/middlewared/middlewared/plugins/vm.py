@@ -1933,35 +1933,46 @@ class VMDeviceService(CRUDService):
         return self.middleware.call_sync('interface.choices', {'exclude': ['epair', 'tap', 'vnet']})
 
     @accepts()
-    def pptdev_choices(self):
+    async def pptdev_choices(self):
         """
         Available choices for PCI passthru device.
         """
+        async def parse_util_output(proc):
+            pptdevs = {}
+            i = 0
+            while True:
+                line = await proc.stdout.readline()
+                if line:
+                    i += 1
+                    object = RE_PCICONF_PPTDEVS.match(line.decode('utf-8'))
+                    if object:
+                        pptdev = object.group(2).replace(':', '/')
+                        pptdevs[pptdev] = pptdev
+                else:
+                    break  # Reached EOF
+            return pptdevs
+
+        cmd_args = ['/usr/sbin/pciconf', '-l']
         if not self.pptdevs:
             proc = None
             try:
-                proc = subprocess.Popen(['/usr/sbin/pciconf', '-l'],
-                                        stdout=subprocess.PIPE,
-                                        stderr=subprocess.DEVNULL, text=True)
-                outs, errs = proc.communicate(timeout=5)
-            except (subprocess.TimeoutExpired, OSError, ValueError) as e:
+                proc = await asyncio.create_subprocess_exec(*cmd_args,
+                                                            stdout=asyncio.subprocess.PIPE,
+                                                            stderr=asyncio.subprocess.DEVNULL)
+                res = await asyncio.wait_for(parse_util_output(proc), timeout=5)
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except (asyncio.TimeoutError, OSError, ValueError) as e:
                 if proc is not None:
                     proc.kill()
-                    outs, errs = proc.communicate()
                 self.middleware.logger.error('An error occured when checking the PCI configuration '
                                              f'for devices available for PCI passthru: {e}.')
             else:
                 if proc.returncode == 0:
-                    lines = outs.split('\n')
-                    for line in lines:
-                        object = RE_PCICONF_PPTDEVS.match(line)
-                        if object:
-                            pptdev = object.group(2).replace(':', '/')
-                            self.pptdevs[pptdev] = pptdev
+                    self.pptdevs = res
                 else:
                     self.middleware.logger.error('An error occured when checking the PCI configuration '
-                                                 'for devices available for PCI passthru. The subprocess '
-                                                 f'({proc.args}) exited with status {proc.returncode}.')
+                                                 'for devices available for PCI passthru: Subprocess '
+                                                 f'({cmd_args}) exited with status {proc.returncode}.')
         return self.pptdevs
 
     @accepts()
