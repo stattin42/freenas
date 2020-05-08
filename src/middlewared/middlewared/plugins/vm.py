@@ -2168,16 +2168,16 @@ class VMDeviceService(CRUDService):
     @private
     async def get_iommu_type(self):
         IOMMU_TESTS = {'VT-d': {'cmd_args': ['/usr/sbin/acpidump', '-t'],
-                                'pattern': r'DMAR'},
+                                'pattern': br'DMAR'},
                        'amdvi': {'cmd_args': ['/sbin/sysctl', '-i', 'hw.vmm.amdvi.enable'],
-                                 'pattern': r'vmm\.amdvi\.enable: 1'}}
+                                 'pattern': br'vmm\.amdvi\.enable: 1'}}
 
         async def check_util_output(proc, pattern):
             found = False
             while True:
                 line = await proc.stdout.readline()
                 if line:
-                    if re.search(pattern, line.decode('utf-8')):
+                    if re.search(pattern, line):
                         found = True
                 else:
                     break  # Reached EOF
